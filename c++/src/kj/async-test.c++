@@ -580,6 +580,29 @@ TEST(Async, ArrayJoinVoid) {
   promise.wait(waitScope);
 }
 
+TEST(Async, Canceler) {
+  EventLoop loop;
+  WaitScope waitScope(loop);
+  Canceler canceler;
+
+  auto never = canceler.wrap(kj::Promise<void>(kj::NEVER_DONE));
+  auto now = canceler.wrap(kj::Promise<void>(kj::READY_NOW));
+  auto neverI = canceler.wrap(kj::Promise<void>(kj::NEVER_DONE).then([]() { return 123u; }));
+  auto nowI = canceler.wrap(kj::Promise<uint>(123u));
+
+  KJ_EXPECT(!never.poll(waitScope));
+  KJ_EXPECT(now.poll(waitScope));
+  KJ_EXPECT(!neverI.poll(waitScope));
+  KJ_EXPECT(nowI.poll(waitScope));
+
+  canceler.cancel("foobar");
+
+  KJ_EXPECT_THROW_RECOVERABLE_MESSAGE("foobar", never.wait(waitScope));
+  now.wait(waitScope);
+  KJ_EXPECT_THROW_MESSAGE("foobar", neverI.wait(waitScope));
+  KJ_EXPECT(nowI.wait(waitScope) == 123u);
+}
+
 class ErrorHandlerImpl: public TaskSet::ErrorHandler {
 public:
   uint exceptionCount = 0;
@@ -608,7 +631,7 @@ TEST(Async, TaskSet) {
     EXPECT_EQ(2, counter++);
   }));
 
-  (void)evalLater([&]() {
+  auto ignore KJ_UNUSED = evalLater([&]() {
     KJ_FAIL_EXPECT("Promise without waiter shouldn't execute.");
   });
 
@@ -702,7 +725,10 @@ TEST(Async, Detach) {
   bool ran2 = false;
   bool ran3 = false;
 
-  (void)evalLater([&]() { ran1 = true; });  // let returned promise be destroyed (canceled)
+  {
+    // let returned promise be destroyed (canceled)
+    auto ignore KJ_UNUSED = evalLater([&]() { ran1 = true; });
+  }
   evalLater([&]() { ran2 = true; }).detach([](kj::Exception&&) { ADD_FAILURE(); });
   evalLater([]() { KJ_FAIL_ASSERT("foo"){break;} }).detach([&](kj::Exception&& e) { ran3 = true; });
 

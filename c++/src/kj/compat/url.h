@@ -27,6 +27,18 @@
 
 namespace kj {
 
+struct UrlOptions {
+  // A bag of options that you can pass to Url::parse()/tryParse() to customize the parser's
+  // behavior.
+  //
+  // A copy of this options struct will be stored in the parsed Url object, at which point it
+  // controls the behavior of the serializer in Url::toString().
+
+  bool percentDecode = true;
+  // True if URL components should be automatically percent-decoded during parsing, and
+  // percent-encoded during serialization.
+};
+
 struct Url {
   // Represents a URL (or, more accurately, a URI, but whatever).
   //
@@ -75,21 +87,15 @@ struct Url {
   Maybe<String> fragment;
   // The stuff after the '#' character (not including the '#' character itself), if present.
 
+  using Options = UrlOptions;
+  Options options;
+
   // ---------------------------------------------------------------------------
 
   Url() = default;
   Url(Url&&) = default;
   ~Url() noexcept(false);
   Url& operator=(Url&&) = default;
-
-#if __cplusplus < 201402L
-  inline Url(String&& scheme, Maybe<UserInfo>&& userInfo, String&& host, Vector<String>&& path,
-             bool hasTrailingSlash, Vector<QueryParam>&& query, Maybe<String>&& fragment)
-      : scheme(kj::mv(scheme)), userInfo(kj::mv(userInfo)), host(kj::mv(host)), path(kj::mv(path)),
-        hasTrailingSlash(hasTrailingSlash), query(kj::mv(query)), fragment(kj::mv(fragment)) {}
-  // TODO(cleanup): This constructor is only here to support brace initialization in C++11. It
-  //   should be removed once we upgrade to C++14.
-#endif
 
   Url clone() const;
 
@@ -114,8 +120,8 @@ struct Url {
   kj::String toString(Context context = REMOTE_HREF) const;
   // Convert the URL to a string.
 
-  static Url parse(StringPtr text, Context context = REMOTE_HREF);
-  static Maybe<Url> tryParse(StringPtr text, Context context = REMOTE_HREF);
+  static Url parse(StringPtr text, Context context = REMOTE_HREF, Options options = {});
+  static Maybe<Url> tryParse(StringPtr text, Context context = REMOTE_HREF, Options options = {});
   // Parse an absolute URL.
 
   Url parseRelative(StringPtr relative) const;

@@ -41,6 +41,7 @@
 #include "message.h"
 #include "any.h"
 #include "capability.h"
+#include <kj/windows-sanity.h>  // work-around macro conflict with `VOID`
 
 namespace capnp {
 
@@ -261,7 +262,7 @@ public:
   template <typename T, typename = kj::EnableIf<kind<FromBuilder<T>>() == Kind::STRUCT>>
   inline Builder(T&& value): Builder(toDynamic(value)) {}
 
-  inline operator AnyStruct::Reader() { return AnyStruct::Builder(builder); }
+  inline operator AnyStruct::Builder() { return AnyStruct::Builder(builder); }
 
   inline MessageSize totalSize() const { return asReader().totalSize(); }
 
@@ -582,6 +583,9 @@ public:
   template <typename SubParams>
   kj::Promise<void> tailCall(Request<SubParams, DynamicStruct>&& tailRequest);
   void allowCancellation();
+
+  StructSchema getParamsType() const { return paramType; }
+  StructSchema getResultsType() const { return resultType; }
 
 private:
   CallContextHook* hook;

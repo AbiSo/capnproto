@@ -67,7 +67,9 @@ class Refcounted: private Disposer {
   //   Own<T> could also be nice.
 
 public:
+  Refcounted() = default;
   virtual ~Refcounted() noexcept(false);
+  KJ_DISALLOW_COPY(Refcounted);
 
   inline bool isShared() const { return refcount > 1; }
   // Check if there are multiple references to this object. This is sometimes useful for deciding
@@ -127,11 +129,13 @@ Own<T> Refcounted::addRefInternal(T* object) {
 
 class AtomicRefcounted: private kj::Disposer {
 public:
+  AtomicRefcounted() = default;
   virtual ~AtomicRefcounted() noexcept(false);
+  KJ_DISALLOW_COPY(AtomicRefcounted);
 
   inline bool isShared() const {
 #if _MSC_VER
-    KJ_MSVC_INTERLOCKED(Or, acq)(&refcount, 0) > 1;
+    return KJ_MSVC_INTERLOCKED(Or, acq)(&refcount, 0) > 1;
 #else
     return __atomic_load_n(&refcount, __ATOMIC_ACQUIRE) > 1;
 #endif

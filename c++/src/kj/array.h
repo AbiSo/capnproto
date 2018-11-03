@@ -420,6 +420,16 @@ public:
     }
   }
 
+  void clear() {
+    if (__has_trivial_destructor(T)) {
+      pos = ptr;
+    } else {
+      while (pos > ptr) {
+        kj::dtor(*--pos);
+      }
+    }
+  }
+
   void resize(size_t size) {
     KJ_IREQUIRE(size <= capacity(), "can't resize past capacity");
 
@@ -852,6 +862,7 @@ template <typename T>
 template <typename... Attachments>
 Array<T> Array<T>::attach(Attachments&&... attachments) {
   T* ptrCopy = ptr;
+  auto sizeCopy = size_;
 
   KJ_IREQUIRE(ptrCopy != nullptr, "cannot attach to null pointer");
 
@@ -862,7 +873,7 @@ Array<T> Array<T>::attach(Attachments&&... attachments) {
 
   auto bundle = new _::ArrayDisposableOwnedBundle<Array<T>, Attachments...>(
       kj::mv(*this), kj::fwd<Attachments>(attachments)...);
-  return Array<T>(ptrCopy, size_, *bundle);
+  return Array<T>(ptrCopy, sizeCopy, *bundle);
 }
 
 template <typename T>

@@ -30,42 +30,37 @@
 #endif
 
 #ifndef KJ_NO_COMPILER_CHECK
-#if __cplusplus < 201103L && !__CDT_PARSER__ && !_MSC_VER
-  #error "This code requires C++11. Either your compiler does not support it or it is not enabled."
+// Technically, __cplusplus should be 201402L for C++14, but GCC 4.9 -- which is supported -- still
+// had it defined to 201300L even with -std=c++14.
+#if __cplusplus < 201300L && !__CDT_PARSER__ && !_MSC_VER
+  #error "This code requires C++14. Either your compiler does not support it or it is not enabled."
   #ifdef __GNUC__
     // Compiler claims compatibility with GCC, so presumably supports -std.
-    #error "Pass -std=c++11 on the compiler command line to enable C++11."
+    #error "Pass -std=c++14 on the compiler command line to enable C++14."
   #endif
 #endif
 
 #ifdef __GNUC__
   #if __clang__
-    #if __clang_major__ < 3 || (__clang_major__ == 3 && __clang_minor__ < 2)
-      #warning "This library requires at least Clang 3.2."
-    #elif defined(__apple_build_version__) && __apple_build_version__ <= 4250028
-      #warning "This library requires at least Clang 3.2.  XCode 4.6's Clang, which claims to be "\
-               "version 4.2 (wat?), is actually built from some random SVN revision between 3.1 "\
-               "and 3.2.  Unfortunately, it is insufficient for compiling this library.  You can "\
-               "download the real Clang 3.2 (or newer) from the Clang web site.  Step-by-step "\
-               "instructions can be found in Cap'n Proto's documentation: "\
-               "http://kentonv.github.io/capnproto/install.html#clang_32_on_mac_osx"
-    #elif __cplusplus >= 201103L && !__has_include(<initializer_list>)
-      #warning "Your compiler supports C++11 but your C++ standard library does not.  If your "\
+    #if __clang_major__ < 3 || (__clang_major__ == 3 && __clang_minor__ < 4)
+      #warning "This library requires at least Clang 3.4."
+    #elif __cplusplus >= 201402L && !__has_include(<initializer_list>)
+      #warning "Your compiler supports C++14 but your C++ standard library does not.  If your "\
                "system has libc++ installed (as should be the case on e.g. Mac OSX), try adding "\
                "-stdlib=libc++ to your CXXFLAGS."
     #endif
   #else
-    #if __GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 7)
-      #warning "This library requires at least GCC 4.7."
+    #if __GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 9)
+      #warning "This library requires at least GCC 4.9."
     #endif
   #endif
 #elif defined(_MSC_VER)
-  #if _MSC_VER < 1900
-    #error "You need Visual Studio 2015 or better to compile this code."
+  #if _MSC_VER < 1910
+    #error "You need Visual Studio 2017 or better to compile this code."
   #endif
 #else
-  #warning "I don't recognize your compiler.  As of this writing, Clang and GCC are the only "\
-           "known compilers with enough C++11 support for this library.  "\
+  #warning "I don't recognize your compiler. As of this writing, Clang, GCC, and Visual Studio "\
+           "are the only known compilers with enough C++14 support for this library. "\
            "#define KJ_NO_COMPILER_CHECK to make this warning go away."
 #endif
 #endif
@@ -306,6 +301,14 @@ KJ_NORETURN(void unreachable());
 
 #else  // _MSC_VER
 #define KJ_CONSTEXPR(...) constexpr
+#endif
+
+#if defined(_MSC_VER) && _MSC_VER < 1910
+// TODO(msvc): Visual Studio 2015 mishandles declaring the no-arg constructor `= default` for
+//   certain template types -- it fails to call member constructors.
+#define KJ_DEFAULT_CONSTRUCTOR_VS2015_BUGGY {}
+#else
+#define KJ_DEFAULT_CONSTRUCTOR_VS2015_BUGGY = default;
 #endif
 
 // =======================================================================================
@@ -867,7 +870,7 @@ class NullableValue {
   // boolean flag indicating nullness.
 
 public:
-  inline NullableValue(NullableValue&& other) noexcept(noexcept(T(instance<T&&>())))
+  inline NullableValue(NullableValue&& other)
       : isSet(other.isSet) {
     if (isSet) {
       ctor(value, kj::mv(other.value));
@@ -919,8 +922,8 @@ public:
     return value;
   }
 
-  inline NullableValue() noexcept: isSet(false) {}
-  inline NullableValue(T&& t) noexcept(noexcept(T(instance<T&&>())))
+  inline NullableValue(): isSet(false) {}
+  inline NullableValue(T&& t)
       : isSet(true) {
     ctor(value, kj::mv(t));
   }
@@ -937,7 +940,7 @@ public:
     if (isSet) ctor(value, *t);
   }
   template <typename U>
-  inline NullableValue(NullableValue<U>&& other) noexcept(noexcept(T(instance<U&&>())))
+  inline NullableValue(NullableValue<U>&& other)
       : isSet(other.isSet) {
     if (isSet) {
       ctor(value, kj::mv(other.value));
@@ -1004,6 +1007,52 @@ public:
     return *this;
   }
 
+  inline NullableValue& operator=(T&& other) { emplace(kj::mv(other)); return *this; }
+  inline NullableValue& operator=(T& other) { emplace(other); return *this; }
+  inline NullableValue& operator=(const T& other) { emplace(other); return *this; }
+  inline NullableValue& operator=(const T* other) {
+    if (other == nullptr) {
+      *this = nullptr;
+    } else {
+      emplace(*other);
+    }
+    return *this;
+  }
+  template <typename U>
+  inline NullableValue& operator=(NullableValue<U>&& other) {
+    if (other.isSet) {
+      emplace(kj::mv(other.value));
+    } else {
+      *this = nullptr;
+    }
+    return *this;
+  }
+  template <typename U>
+  inline NullableValue& operator=(const NullableValue<U>& other) {
+    if (other.isSet) {
+      emplace(other.value);
+    } else {
+      *this = nullptr;
+    }
+    return *this;
+  }
+  template <typename U>
+  inline NullableValue& operator=(const NullableValue<U&>& other) {
+    if (other.isSet) {
+      emplace(other.value);
+    } else {
+      *this = nullptr;
+    }
+    return *this;
+  }
+  inline NullableValue& operator=(decltype(nullptr)) {
+    if (isSet) {
+      isSet = false;
+      dtor(value);
+    }
+    return *this;
+  }
+
   inline bool operator==(decltype(nullptr)) const { return !isSet; }
   inline bool operator!=(decltype(nullptr)) const { return isSet; }
 
@@ -1057,16 +1106,16 @@ class Maybe {
 
 public:
   Maybe(): ptr(nullptr) {}
-  Maybe(T&& t) noexcept(noexcept(T(instance<T&&>()))): ptr(kj::mv(t)) {}
+  Maybe(T&& t): ptr(kj::mv(t)) {}
   Maybe(T& t): ptr(t) {}
   Maybe(const T& t): ptr(t) {}
-  Maybe(const T* t) noexcept: ptr(t) {}
-  Maybe(Maybe&& other) noexcept(noexcept(T(instance<T&&>()))): ptr(kj::mv(other.ptr)) {}
+  Maybe(const T* t): ptr(t) {}
+  Maybe(Maybe&& other): ptr(kj::mv(other.ptr)) {}
   Maybe(const Maybe& other): ptr(other.ptr) {}
   Maybe(Maybe& other): ptr(other.ptr) {}
 
   template <typename U>
-  Maybe(Maybe<U>&& other) noexcept(noexcept(T(instance<U&&>()))) {
+  Maybe(Maybe<U>&& other) {
     KJ_IF_MAYBE(val, kj::mv(other)) {
       ptr.emplace(kj::mv(*val));
     }
@@ -1078,7 +1127,7 @@ public:
     }
   }
 
-  Maybe(decltype(nullptr)) noexcept: ptr(nullptr) {}
+  Maybe(decltype(nullptr)): ptr(nullptr) {}
 
   template <typename... Params>
   inline T& emplace(Params&&... params) {
@@ -1089,9 +1138,35 @@ public:
     return ptr.emplace(kj::fwd<Params>(params)...);
   }
 
+  inline Maybe& operator=(T&& other) { ptr = kj::mv(other); return *this; }
+  inline Maybe& operator=(T& other) { ptr = other; return *this; }
+  inline Maybe& operator=(const T& other) { ptr = other; return *this; }
+  inline Maybe& operator=(const T* other) { ptr = other; return *this; }
+
   inline Maybe& operator=(Maybe&& other) { ptr = kj::mv(other.ptr); return *this; }
   inline Maybe& operator=(Maybe& other) { ptr = other.ptr; return *this; }
   inline Maybe& operator=(const Maybe& other) { ptr = other.ptr; return *this; }
+
+  template <typename U>
+  Maybe& operator=(Maybe<U>&& other) {
+    KJ_IF_MAYBE(val, kj::mv(other)) {
+      ptr.emplace(kj::mv(*val));
+    } else {
+      ptr = nullptr;
+    }
+    return *this;
+  }
+  template <typename U>
+  Maybe& operator=(const Maybe<U>& other) {
+    KJ_IF_MAYBE(val, other) {
+      ptr.emplace(*val);
+    } else {
+      ptr = nullptr;
+    }
+    return *this;
+  }
+
+  inline Maybe& operator=(decltype(nullptr)) { ptr = nullptr; return *this; }
 
   inline bool operator==(decltype(nullptr)) const { return ptr == nullptr; }
   inline bool operator!=(decltype(nullptr)) const { return ptr != nullptr; }
@@ -1177,22 +1252,22 @@ private:
 template <typename T>
 class Maybe<T&>: public DisallowConstCopyIfNotConst<T> {
 public:
-  Maybe() noexcept: ptr(nullptr) {}
-  Maybe(T& t) noexcept: ptr(&t) {}
-  Maybe(T* t) noexcept: ptr(t) {}
+  Maybe(): ptr(nullptr) {}
+  Maybe(T& t): ptr(&t) {}
+  Maybe(T* t): ptr(t) {}
 
   template <typename U>
-  inline Maybe(Maybe<U&>& other) noexcept: ptr(other.ptr) {}
+  inline Maybe(Maybe<U&>& other): ptr(other.ptr) {}
   template <typename U>
-  inline Maybe(const Maybe<U&>& other) noexcept: ptr(const_cast<const U*>(other.ptr)) {}
-  inline Maybe(decltype(nullptr)) noexcept: ptr(nullptr) {}
+  inline Maybe(const Maybe<U&>& other): ptr(const_cast<const U*>(other.ptr)) {}
+  inline Maybe(decltype(nullptr)): ptr(nullptr) {}
 
-  inline Maybe& operator=(T& other) noexcept { ptr = &other; return *this; }
-  inline Maybe& operator=(T* other) noexcept { ptr = other; return *this; }
+  inline Maybe& operator=(T& other) { ptr = &other; return *this; }
+  inline Maybe& operator=(T* other) { ptr = other; return *this; }
   template <typename U>
-  inline Maybe& operator=(Maybe<U&>& other) noexcept { ptr = other.ptr; return *this; }
+  inline Maybe& operator=(Maybe<U&>& other) { ptr = other.ptr; return *this; }
   template <typename U>
-  inline Maybe& operator=(const Maybe<const U&>& other) noexcept { ptr = other.ptr; return *this; }
+  inline Maybe& operator=(const Maybe<const U&>& other) { ptr = other.ptr; return *this; }
 
   inline bool operator==(decltype(nullptr)) const { return ptr == nullptr; }
   inline bool operator!=(decltype(nullptr)) const { return ptr != nullptr; }

@@ -22,6 +22,10 @@
 #if !_WIN32
 // For Win32 implementation, see async-io-win32.c++.
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "async-io.h"
 #include "async-io-internal.h"
 #include "async-unix.h"
@@ -778,8 +782,10 @@ public:
   }
 
 private:
-  SocketAddress(): addrlen(0) {
-    memset(&addr, 0, sizeof(addr));
+  SocketAddress() {
+    // We need to memset the whole object 0 otherwise Valgrind gets unhappy when we write it to a
+    // pipe, due to the padding bytes being uninitialized.
+    memset(this, 0, sizeof(*this));
   }
 
   socklen_t addrlen;
@@ -902,7 +908,6 @@ Promise<Array<SocketAddress>> SocketAddress::lookupHost(
         }
 
         SocketAddress addr;
-        memset(&addr, 0, sizeof(addr));  // mollify valgrind
         if (params.host == "*") {
           // Set up a wildcard SocketAddress.  Only use the port number returned by getaddrinfo().
           addr.wildcard = true;

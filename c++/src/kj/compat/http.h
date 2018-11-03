@@ -152,7 +152,7 @@ public:
   //
   //     HttpHeaderId::HOST
   //
-  // TODO(soon): Fill this out with more common headers.
+  // TODO(someday): Fill this out with more common headers.
 
 #define DECLARE_HEADER(id, name) \
   static const HttpHeaderId id;
@@ -332,16 +332,40 @@ public:
   // to split it into a bunch of shorter strings. The caller must keep `content` valid until the
   // `HttpHeaders` is destroyed, or pass it to `takeOwnership()`.
 
+  bool tryParse(kj::ArrayPtr<char> content);
+  // Like tryParseRequest()/tryParseResponse(), but don't expect any request/response line.
+
   kj::String serializeRequest(HttpMethod method, kj::StringPtr url,
                               kj::ArrayPtr<const kj::StringPtr> connectionHeaders = nullptr) const;
   kj::String serializeResponse(uint statusCode, kj::StringPtr statusText,
                                kj::ArrayPtr<const kj::StringPtr> connectionHeaders = nullptr) const;
+  // **Most applications will not use these methods; they are called by the HTTP client and server
+  // implementations.**
+  //
   // Serialize the headers as a complete request or response blob. The blob uses '\r\n' newlines
   // and includes the double-newline to indicate the end of the headers.
   //
   // `connectionHeaders`, if provided, contains connection-level headers supplied by the HTTP
   // implementation, in the order specified by the KJ_HTTP_FOR_EACH_BUILTIN_HEADER macro. These
-  // headers values override any corresponding header value in the HttpHeaders object.
+  // headers values override any corresponding header value in the HttpHeaders object. The
+  // CONNECTION_HEADERS_COUNT constants below can help you construct this `connectionHeaders` array.
+
+  enum class BuiltinIndicesEnum {
+  #define HEADER_ID(id, name) id,
+    KJ_HTTP_FOR_EACH_BUILTIN_HEADER(HEADER_ID)
+  #undef HEADER_ID
+  };
+
+  struct BuiltinIndices {
+  #define HEADER_ID(id, name) static constexpr uint id = static_cast<uint>(BuiltinIndicesEnum::id);
+    KJ_HTTP_FOR_EACH_BUILTIN_HEADER(HEADER_ID)
+  #undef HEADER_ID
+  };
+
+  static constexpr uint HEAD_RESPONSE_CONNECTION_HEADERS_COUNT = BuiltinIndices::CONTENT_LENGTH;
+  static constexpr uint CONNECTION_HEADERS_COUNT = BuiltinIndices::SEC_WEBSOCKET_KEY;
+  static constexpr uint WEBSOCKET_CONNECTION_HEADERS_COUNT = BuiltinIndices::HOST;
+  // Constants for use with HttpHeaders::serialize*().
 
   kj::String toString() const;
 
@@ -373,6 +397,58 @@ private:
   // TODO(perf): Arguably we should store a map, but header sets are never very long
   // TODO(perf): We could optimize for common headers by storing them directly as fields. We could
   //   also add direct accessors for those headers.
+};
+
+class HttpInputStream {
+  // Low-level interface to receive HTTP-formatted messages (headers followed by body) from an
+  // input stream, without a paired output stream.
+  //
+  // Most applications will not use this. Regular HTTP clients and servers don't need this. This
+  // is mainly useful for apps implementing various protocols that look like HTTP but aren't
+  // really.
+
+public:
+  struct Request {
+    HttpMethod method;
+    kj::StringPtr url;
+    const HttpHeaders& headers;
+    kj::Own<kj::AsyncInputStream> body;
+  };
+  virtual kj::Promise<Request> readRequest() = 0;
+  // Reads one HTTP request from the input stream.
+  //
+  // The returned struct contains pointers directly into a buffer that is invalidated on the next
+  // message read.
+
+  struct Response {
+    uint statusCode;
+    kj::StringPtr statusText;
+    const HttpHeaders& headers;
+    kj::Own<kj::AsyncInputStream> body;
+  };
+  virtual kj::Promise<Response> readResponse(HttpMethod requestMethod) = 0;
+  // Reads one HTTP response from the input stream.
+  //
+  // You must provide the request method because responses to HEAD requests require special
+  // treatment.
+  //
+  // The returned struct contains pointers directly into a buffer that is invalidated on the next
+  // message read.
+
+  struct Message {
+    const HttpHeaders& headers;
+    kj::Own<kj::AsyncInputStream> body;
+  };
+  virtual kj::Promise<Message> readMessage() = 0;
+  // Reads an HTTP header set followed by a body, with no request or response line. This is not
+  // useful for HTTP but may be useful for other protocols that make the unfortunate choice to
+  // mimic HTTP message format, such as Visual Studio Code's JSON-RPC transport.
+  //
+  // The returned struct contains pointers directly into a buffer that is invalidated on the next
+  // message read.
+
+  virtual kj::Promise<bool> awaitNextMessage() = 0;
+  // Waits until more data is available, but doesn't consume it. Returns false on EOF.
 };
 
 class EntropySource {
@@ -424,7 +500,7 @@ public:
   // Read one message from the WebSocket and return it. Can only call once at a time. Do not call
   // again after Close is received.
 
-  kj::Promise<void> pumpTo(WebSocket& other);
+  virtual kj::Promise<void> pumpTo(WebSocket& other);
   // Continuously receives messages from this WebSocket and send them to `other`.
   //
   // On EOF, calls other.disconnect(), then resolves.
@@ -432,6 +508,12 @@ public:
   // On other read errors, calls other.close() with the error, then resolves.
   //
   // On write error, rejects with the error.
+
+  virtual kj::Maybe<kj::Promise<void>> tryPumpFrom(WebSocket& other);
+  // Either returns null, or performs the equivalent of other.pumpTo(*this). Only returns non-null
+  // if this WebSocket implementation is able to perform the pump in an optimized way, better than
+  // the default implementation of pumpTo(). The default implementation of pumpTo() always tries
+  // calling this first, and the default implementation of tryPumpFrom() always returns null.
 };
 
 class HttpClient {
@@ -556,7 +638,7 @@ public:
 struct HttpClientSettings {
   kj::Duration idleTimout = 5 * kj::SECONDS;
   // For clients which automatically create new connections, any connection idle for at least this
-  // long will be closed.
+  // long will be closed. Set this to 0 to prevent connection reuse entirely.
 
   kj::Maybe<EntropySource&> entropySource = nullptr;
   // Must be provided in order to use `openWebSocket`. If you don't need WebSockets, this can be
@@ -610,15 +692,19 @@ kj::Own<HttpClient> newHttpClient(HttpHeaderTable& responseHeaderTable, kj::Asyn
 // subsequent requests will fail. If a response takes a long time, it blocks subsequent responses.
 // If a WebSocket is opened successfully, all subsequent requests fail.
 
-kj::Own<HttpClient> newHttpClient(
-    HttpHeaderTable& responseHeaderTable, kj::AsyncIoStream& stream,
-    kj::Maybe<EntropySource&> entropySource) KJ_DEPRECATED("use HttpClientSettings");
-// Temporary for backwards-compatibilty.
-// TODO(soon): Remove this before next release.
-
 kj::Own<HttpClient> newHttpClient(HttpService& service);
 kj::Own<HttpService> newHttpService(HttpClient& client);
 // Adapts an HttpClient to an HttpService and vice versa.
+
+kj::Own<HttpInputStream> newHttpInputStream(
+    kj::AsyncInputStream& input, HttpHeaderTable& headerTable);
+// Create an HttpInputStream on top of the given stream. Normally applications would not call this
+// directly, but it can be useful for implementing protocols that aren't quite HTTP but use similar
+// message delimiting.
+//
+// The HttpInputStream implementation does read-ahead buffering on `input`. Therefore, when the
+// HttpInputStream is destroyed, some data read from `input` may be lost, so it's not possible to
+// continue reading from `input` in a reliable way.
 
 kj::Own<WebSocket> newWebSocket(kj::Own<kj::AsyncIoStream> stream,
                                 kj::Maybe<EntropySource&> maskEntropySource);
@@ -633,6 +719,15 @@ kj::Own<WebSocket> newWebSocket(kj::Own<kj::AsyncIoStream> stream,
 // purpose of the mask is to prevent badly-written HTTP proxies from interpreting "things that look
 // like HTTP requests" in a message as being actual HTTP requests, which could result in cache
 // poisoning. See RFC6455 section 10.3.
+
+struct WebSocketPipe {
+  kj::Own<WebSocket> ends[2];
+};
+
+WebSocketPipe newWebSocketPipe();
+// Create a WebSocket pipe. Messages written to one end of the pipe will be readable from the other
+// end. No buffering occurs -- a message send does not complete until a corresponding receive
+// accepts the message.
 
 struct HttpServerSettings {
   kj::Duration headerTimeout = 15 * kj::SECONDS;
@@ -652,7 +747,7 @@ struct HttpServerSettings {
   // completes, we'll let the connection stay open to handle more requests.
 };
 
-class HttpServer: private kj::TaskSet::ErrorHandler {
+class HttpServer final: private kj::TaskSet::ErrorHandler {
   // Class which listens for requests on ports or connections and sends them to an HttpService.
 
 public:
@@ -764,14 +859,6 @@ inline void HttpHeaders::forEach(Func&& func) const {
   for (auto& header: unindexedHeaders) {
     func(header.name, header.value);
   }
-}
-
-inline kj::Own<HttpClient> newHttpClient(
-    HttpHeaderTable& responseHeaderTable, kj::AsyncIoStream& stream,
-    kj::Maybe<EntropySource&> entropySource) {
-  HttpClientSettings settings;
-  settings.entropySource = entropySource;
-  return newHttpClient(responseHeaderTable, stream, kj::mv(settings));
 }
 
 }  // namespace kj

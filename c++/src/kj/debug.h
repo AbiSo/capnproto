@@ -112,11 +112,7 @@
 
 #include "string.h"
 #include "exception.h"
-
-#ifdef ERROR
-// This is problematic because windows.h #defines ERROR, which we use in an enum here.
-#error "Make sure to to undefine ERROR (or just #include <kj/windows-sanity.h>) before this file"
-#endif
+#include "windows-sanity.h"  // work-around macro conflict with `ERROR`
 
 namespace kj {
 
@@ -135,7 +131,8 @@ namespace kj {
 #define KJ_EXPAND(X) X
 
 #define KJ_LOG(severity, ...) \
-  if (!::kj::_::Debug::shouldLog(::kj::LogSeverity::severity)) {} else \
+  for (bool _kj_shouldLog = ::kj::_::Debug::shouldLog(::kj::LogSeverity::severity); \
+       _kj_shouldLog; _kj_shouldLog = false) \
     ::kj::_::Debug::log(__FILE__, __LINE__, ::kj::LogSeverity::severity, \
                         "" #__VA_ARGS__, __VA_ARGS__)
 
@@ -214,7 +211,8 @@ namespace kj {
 #else
 
 #define KJ_LOG(severity, ...) \
-  if (!::kj::_::Debug::shouldLog(::kj::LogSeverity::severity)) {} else \
+  for (bool _kj_shouldLog = ::kj::_::Debug::shouldLog(::kj::LogSeverity::severity); \
+       _kj_shouldLog; _kj_shouldLog = false) \
     ::kj::_::Debug::log(__FILE__, __LINE__, ::kj::LogSeverity::severity, \
                         #__VA_ARGS__, ##__VA_ARGS__)
 
